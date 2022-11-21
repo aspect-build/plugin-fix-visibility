@@ -1,0 +1,10 @@
+# Configuration of plugins to the Aspect CLI
+# See https://github.com/aspect-build/aspect-cli/blob/main/docs/help/topics/plugins.md
+- name: hello-world
+  # This file is created by running `bazel build :dev` so that we can easily test local changes.
+  # Since the bazel-bin folder is in .gitignore, you'll get a warning on the first run.
+  # Users will install the plugin from a pre-built binary, using the instructions in the release notes.
+  from: bazel-bin/plugin
+  # The possible log levels are: TRACE, DEBUG, INFO, WARN, ERROR, OFF.
+  # NB: to diagnose plugin crashes, use DEBUG
+  log_level: WARN

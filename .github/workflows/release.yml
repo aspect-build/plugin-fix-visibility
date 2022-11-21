@@ -1,0 +1,41 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Bazel caches
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/bazel
+            ~/.cache/bazel-repo
+          key: >-
+            bazel-cache-${{ hashFiles('**/*.go', '**/BUILD.bazel', '**/*.bzl',
+            'WORKSPACE') }}
+          restore-keys: bazel-cache-
+      - name: Build release artifacts
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            >&2 echo "ERROR: the git state is not clean, aborting build..."
+            exit 1
+          fi
+          rm -rf /tmp/aspect/release
+          bazel --bazelrc=.github/workflows/ci.bazelrc --bazelrc=.bazelrc run --config=release //release -- /tmp/aspect/release
+      - name: Prepare workspace snippet
+        run: envsubst < .github/workflows/release_notes.txt > release_notes.txt
+      - name: Create GitHub draft release and upload artifacts
+        uses: softprops/action-gh-release@v1
+        with:
+          prerelease: true
+          draft: true
+          generate_release_notes: true
+          files: /tmp/aspect/release/*
+          body_path: release_notes.txt
