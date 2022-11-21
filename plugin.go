@@ -1,97 +1,224 @@
+/*
+ * Copyright 2022 Aspect Build Systems, Inc. All rights reserved.
+ *
+ * Licensed under the aspect.build Community License (the "License");
+ * you may not use this file except in compliance with the License.
+ * Full License text is in the LICENSE file included in the root of this repository
+ * and at https://aspect.build/communitylicense
+ */
+
+// The fix-visibility is a plugin for the aspect CLI. When running in interactive
+// mode, it offers to automatically fix visibility issues, otherwise, it prints to
+// the terminal the buildozer commands necessary to perform the fix manually.
+//
+// This plugin is also a reference implementation of a plugin using the Go SDK.
+// You will find the code below commented to your satisfaction.
 package main
 
 import (
-	"context"
+	"bytes"
 	"fmt"
 	"os"
-
-	goplugin "github.com/hashicorp/go-plugin"
-	"github.com/manifoldco/promptui"
+	"regexp"
+	"strings"
 
 	"aspect.build/cli/bazel/buildeventstream"
-	"aspect.build/cli/bazel/command_line"
-	"aspect.build/cli/pkg/bazel"
 	"aspect.build/cli/pkg/ioutils"
 	"aspect.build/cli/pkg/plugin/sdk/v1alpha3/config"
 	aspectplugin "aspect.build/cli/pkg/plugin/sdk/v1alpha3/plugin"
+	goplugin "github.com/hashicorp/go-plugin"
+	"github.com/manifoldco/promptui"
+	"github.com/bazelbuild/bazel-gazelle/label"
+	"github.com/bazelbuild/buildtools/edit"
 )
 
 // main starts up the plugin as a child process of the CLI and connects the gRPC communication.
 func main() {
-	goplugin.Serve(config.NewConfigFor(&HelloWorldPlugin{}))
+	goplugin.Serve(config.NewConfigFor(&FixVisibilityPlugin{
+		buildozer:    &buildozer{},
+		targetsToFix: &fixOrderedSet{nodes: make(map[fixNode]struct{})},
+	}))
 }
 
-// HelloWorldPlugin declares the fields on an instance of the plugin.
-type HelloWorldPlugin struct {
-	// Base gives default implementations of the plugin methods, so implementing them below is optional.
-	// See the definition of aspectplugin.Base for more methods that can be implemented by the plugin.
+// FixVisibilityPlugin implements an aspect CLI plugin.
+type FixVisibilityPlugin struct {
 	aspectplugin.Base
-	// This plugin will store some state from the Build Events for use at the end of the build.
-	command_line.CommandLine
+
+	buildozer    runner
+	targetsToFix *fixOrderedSet
 }
 
-// CustomCommands contributes a new 'hello-world' command alongside the built-in ones like 'build' and 'test'.
-func (plugin *HelloWorldPlugin) CustomCommands() ([]*aspectplugin.Command, error) {
-	return []*aspectplugin.Command{
-		aspectplugin.NewCommand(
-			"hello-world",
-			"Print 'Hello World!' to the command line.",
-			"Print 'Hello World!' to the command line. Echo any given argument. Then run a 'bazel help'",
-			func(ctx context.Context, args []string, bzl bazel.Bazel) error {
-				fmt.Println("Hello World!")
-				fmt.Print("Arguments passed to command: ")
-				fmt.Println(args)
-				fmt.Println("Going to run: 'bazel help'")
+const visibilityIssueSubstring = "is not visible from target"
+const removePrivateVisibilityBuildozerCommand = "remove visibility //visibility:private"
+var visibilityIssueRegex = regexp.MustCompile(fmt.Sprintf(`.*target '(.*)' %s '(.*)'.*`, visibilityIssueSubstring))
 
-				bzl.RunCommand(ioutils.DefaultStreams, "help")
-
-				return nil
-			},
-		),
-	}, nil
-}
-// BEPEventCallback subscribes to all Build Events, and lets our logic react to ones we care about.
-func (plugin *HelloWorldPlugin) BEPEventCallback(event *buildeventstream.BuildEvent) error {
-	switch event.Payload.(type) {
-		case *buildeventstream.BuildEvent_StructuredCommandLine:
-			commandLine := *event.GetStructuredCommandLine()
-			if commandLine.CommandLineLabel == "canonical" {
-				plugin.CommandLine = commandLine
-			}
+// BEPEventCallback satisfies the Plugin interface. It processes all the analysis
+// failures that represent a visibility issue, collecting them for later
+// processing in the post-build hook execution.
+func (plugin *FixVisibilityPlugin) BEPEventCallback(event *buildeventstream.BuildEvent) error {
+	// First, verify if the received event is of the type Aborted. The visibility
+	// issue events are emitted as ANALYSIS_FAILUE, so if there's an analysis
+	// failure and the description of the event contains the known-issue string,
+	// we perform a regex match to extract the targets. Note that strings.Contains
+	// is much cheaper than relying on the regex matching, so we only call regex
+	// when we are absolutely sure it will return a valid match.
+	aborted := event.GetAborted()
+	if aborted != nil &&
+		aborted.Reason == buildeventstream.Aborted_ANALYSIS_FAILURE &&
+		strings.Contains(aborted.Description, visibilityIssueSubstring) {
+		matches := visibilityIssueRegex.FindStringSubmatch(aborted.Description)
+		if len(matches) == 3 {
+			// Here, we insert the matched targets in a linked list for processing
+			// in the post-build hook.
+			plugin.targetsToFix.insert(matches[1], matches[2])
+		}
 	}
 	return nil
 }
 
-// PostBuildHook will be called at the end of an `aspect build` execution, after Bazel completes.
-func (plugin *HelloWorldPlugin) PostBuildHook(
+// PostBuildHook satisfies the Plugin interface. It prompts the user for
+// automatic fixes when in interactive mode. If the user rejects the automatic
+// fixes, or if running in non-interactive mode, the commands to perform the fixes
+// are printed to the terminal.
+func (plugin *FixVisibilityPlugin) PostBuildHook(
 	isInteractiveMode bool,
 	promptRunner ioutils.PromptRunner,
 ) error {
-	// We condition prompting on whether there's an interactive user to engage with.
-	if isInteractiveMode {
-		// The manifoldco/promptui library creates many styles of interactive prompts.
-		// Check out the examples: https://github.com/manifoldco/promptui/tree/master/_examples
-		prompt := promptui.Prompt{
-			Label:     "Thanks for trying the hello-world plugin! Would you like to see the command that was run",
-			IsConfirm: true,
-		}
-		// Since the prompt is a boolean, any non-nil error should represent a NO.
-		if _, err := promptRunner.Run(prompt); err == nil {
-			plugin.printTargetPattern()
-		}
+	if plugin.targetsToFix.size == 0 {
+		return nil
 	}
-	return nil
-}
 
-// printTargetPattern is just representative of some logic a plugin might want to perform on the data collected.
-func (plugin *HelloWorldPlugin) printTargetPattern() {
-	for _, section := range plugin.CommandLine.Sections {
-		fmt.Fprintf(os.Stdout, "%s\n", section.SectionLabel)
-		if section.SectionLabel == "residual" {
-			switch f := section.SectionType.(type) {
-			case *command_line.CommandLineSection_ChunkList:
-				fmt.Fprintf(os.Stdout, "target pattern was %s\n", f.ChunkList.Chunk[0])
+	// For each collected visibility issue...
+	for node := plugin.targetsToFix.head; node != nil; node = node.next {
+		// ... we construct the label for the target we want to add to the target
+		// being fixed.
+		fromLabel, err := label.Parse(node.from)
+		if err != nil {
+			return fmt.Errorf("failed to fix visibility: %w", err)
+		}
+		fromLabel.Name = "__pkg__"
+
+		// We need to verify if the target being fixed contains //visibility:private,
+		// otherwise Bazel will yell at us since we will need to remove it to add
+		// any package to the visibility attribute.
+		hasPrivateVisibility, err := plugin.hasPrivateVisibility(node.toFix)
+		if err != nil {
+			return fmt.Errorf("failed to fix visibility: %w", err)
+		}
+
+		// We check whether it's running in interactive mode, if so, send a request
+		// to prompt the user using the promptRunner injected by the CLI core in
+		// this method.
+		var applyFix bool
+		if isInteractiveMode {
+			applyFixPrompt := promptui.Prompt{
+				Label:     "Would you like to auto-fix to the visibility attribute",
+				IsConfirm: true,
+			}
+			_, err := promptRunner.Run(applyFixPrompt)
+			// Since the prompt is a boolean, any non-nil error should represent a NO.
+			applyFix = err == nil
+		}
+
+		// Here we either perform the fix automatically, or print the commands for
+		// the user to perform the fixes manually.
+		addVisibilityBuildozerCommand := fmt.Sprintf("add visibility %s", fromLabel)
+		if applyFix {
+			if _, err := plugin.buildozer.run(addVisibilityBuildozerCommand, node.toFix); err != nil {
+				return fmt.Errorf("failed to fix visibility: %w", err)
+			}
+			if hasPrivateVisibility {
+				if _, err := plugin.buildozer.run(removePrivateVisibilityBuildozerCommand, node.toFix); err != nil {
+					return fmt.Errorf("failed to fix visibility: %w", err)
+				}
+			}
+		} else {
+			fmt.Fprintf(os.Stdout, "To fix the visibility errors, run:\n")
+			fmt.Fprintf(os.Stdout, "buildozer '%s' %s\n", addVisibilityBuildozerCommand, node.toFix)
+			if hasPrivateVisibility {
+				fmt.Fprintf(os.Stdout, "buildozer '%s' %s\n", removePrivateVisibilityBuildozerCommand, node.toFix)
 			}
 		}
 	}
+
+	return nil
+}
+
+// PostTestHook satisfies the Plugin interface. In this case, it just calls the
+// PostBuildHook.
+func (plugin *FixVisibilityPlugin) PostTestHook(
+	isInteractiveMode bool,
+	promptRunner ioutils.PromptRunner,
+) error {
+	return plugin.PostBuildHook(isInteractiveMode, promptRunner)
+}
+
+// PostRunHook satisfies the Plugin interface. In this case, it just calls the
+// PostBuildHook.
+func (plugin *FixVisibilityPlugin) PostRunHook(
+	isInteractiveMode bool,
+	promptRunner ioutils.PromptRunner,
+) error {
+	return plugin.PostBuildHook(isInteractiveMode, promptRunner)
+}
+
+func (plugin *FixVisibilityPlugin) hasPrivateVisibility(toFix string) (bool, error) {
+	visibility, err := plugin.buildozer.run("print visibility", toFix)
+	if err != nil {
+		return false, fmt.Errorf("failed to check if target has private visibility: %w", err)
+	}
+	return bytes.Contains(visibility, []byte("//visibility:private")), nil
+}
+
+type fixOrderedSet struct {
+	head  *fixNode
+	tail  *fixNode
+	nodes map[fixNode]struct{}
+	size  int
+}
+
+func (s *fixOrderedSet) insert(toFix, from string) {
+	node := fixNode{
+		toFix: toFix,
+		from:  from,
+	}
+
+	if _, exists := s.nodes[node]; !exists {
+		s.nodes[node] = struct{}{}
+		if s.head == nil {
+			s.head = &node
+		} else {
+			s.tail.next = &node
+		}
+		s.tail = &node
+		s.size++
+	}
+}
+
+type fixNode struct {
+	next  *fixNode
+	toFix string
+	from  string
+}
+
+type runner interface {
+	run(args ...string) ([]byte, error)
+}
+
+type buildozer struct{}
+
+func (b *buildozer) run(args ...string) ([]byte, error) {
+	var stdout bytes.Buffer
+	var stderr strings.Builder
+	edit.ShortenLabelsFlag = true
+	edit.DeleteWithComments = true
+	opts := &edit.Options{
+		OutWriter: &stdout,
+		ErrWriter: &stderr,
+		NumIO:     200,
+	}
+	if ret := edit.Buildozer(opts, args); ret != 0 {
+		return stdout.Bytes(), fmt.Errorf("failed to run buildozer: exit code %d: %s", ret, stderr.String())
+	}
+	return stdout.Bytes(), nil
 }

@@ -1,29 +1,24 @@
-# Template for aspect-cli plugins
+# Fix-visibility plugin
 
-This repo provides the fastest way to make a plugin for the [aspect cli].
+This is a plugin for the [Aspect CLI].
 
-It contains a plugin written in Go, with a GitHub actions CI/CD pipeline to release it.
+It listens to Bazel's build event protocol and filters for the Aborted_ANALYSIS_FAILURE event.
+If the Analysis Failure is due to a message containing `is not visible from target` this indicates
+that the `visibility` attribute of a target doesn't include the package where our target is defined.
 
-More details about aspect cli plugins is on the [plugin documentation].
+After the build completes, the plugin offers to repair the problem by adding the missing `visibility` entry.
 
-## Instructions
+In this demo, we uncomment the `alias` target from `example/BUILD.bazel` and run `bazel build example` to see the failure.
+The plugin offers to automatically add the missing entry to `visibility` of the `//:dev` target,
+then we run the same build again, and it passes.
+The demo then runs `git diff` so you can see what edit was made.
 
-Create a new repo with the green "Use this template" button above.
-Then in your repo...
-
-1. Find-and-replace `hello_world` with your plugin name.
-1. Find-and-replace `github.com/aspect-build/aspect-cli-plugin-template` with the name of your Go module. See <https://go.dev/doc/modules/developing>
-1. Delete everything above the SNIP line below, and start coding on your features!
-
----------- %<  SNIP %< ------------
-
-# My Plugin
-
-This is a plugin for the Aspect CLI.
+[![asciicast](https://asciinema.org/a/1IRPgMQmhJC3L8RM1XTwRYUfa.svg)](https://asciinema.org/a/1IRPgMQmhJC3L8RM1XTwRYUfa)
 
 ## Developing
 
-To try the plugin, first check that you have the most recent [aspect cli release] installed.
+To try the plugin, first check that you have Aspect installed, by running `bazel version` and checking for
+`Aspect CLI version` in the output.
 
 First build the plugin from source:
 
@@ -34,16 +29,6 @@ First build the plugin from source:
 Note that the `.aspect/cli/plugins.yaml` file has a reference to the path under `bazel-bin` where the plugin binary was just written.
 On the first build, you'll see a warning printed that the plugin doesn't exist at this path.
 This is just the development flow for working on plugins; users will reference the plugin's releases which are downloaded for them automatically.
-
-Now just run `aspect`. You should see that `hello-world` appears in the help output. This shows that our plugin was loaded and contributed a custom command to the CLI.
-
-```
-Usage:
-  aspect [command]
-
-Custom Commands from Plugins:
-  hello-world        Print 'Hello World!' to the command line.
-```
 
 ## Releasing
 

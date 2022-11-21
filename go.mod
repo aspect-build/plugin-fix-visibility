@@ -1,9 +1,11 @@
-module github.com/aspect-build/aspect-cli-plugin-template
+module github.com/aspect-build/plugin-fix-visibility
 
 go 1.19
 
 require (
 	aspect.build/cli v1.0.1
+	github.com/bazelbuild/bazel-gazelle v0.28.0
+	github.com/bazelbuild/buildtools v0.0.0-20221004120235-7186f635531b
 	github.com/hashicorp/go-plugin v1.4.5
 	github.com/manifoldco/promptui v0.9.0
 )

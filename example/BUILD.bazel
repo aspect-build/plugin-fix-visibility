@@ -1,0 +1,5 @@
+# Uncomment and build this package to see the feature work.
+# alias(
+#     name = "example",
+#     actual = "//:dev",
+# )
