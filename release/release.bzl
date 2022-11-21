@@ -25,7 +25,7 @@ sha256 = rule(
     provides = [DefaultInfo],
 )
 
-def local_plugin(name, binary, path):
+def local_plugin(name, binary, path, **kwargs):
     out = "_{}.out".format(name)
     sum = "_{}.sum".format(name)
 
@@ -48,6 +48,7 @@ def local_plugin(name, binary, path):
     native.filegroup(
         name = name,
         srcs = [out, sum],
+        **kwargs
     )
 
 PLATFORMS = [
