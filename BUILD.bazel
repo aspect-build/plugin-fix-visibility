@@ -46,7 +46,7 @@ go_binary(
 )
 
 # Copy the plugin to bazel-bin/plugin and checksum it.
-# Referenced by the .aspect/cli/plugins.yaml in the `From:` line.
+# Referenced by the .aspect/cli/config.yaml in the `From:` line.
 local_plugin(
     name = "dev",
     binary = ":plugin-fix-visibility",

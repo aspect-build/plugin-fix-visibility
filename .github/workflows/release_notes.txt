@@ -1,7 +1,8 @@
-To use this plugin, add it to your `.aspect/cli/plugins.yaml` file like so:
+To use this plugin, add it to your `.aspect/cli/config.yaml` file like so:
 
 ```
-- name: fix-visibility
-  from: github.com/aspect-build/plugin-fix-visibility
-  version: ${GITHUB_REF_NAME}
+plugins:
+  - name: fix-visibility
+    from: github.com/aspect-build/plugin-fix-visibility
+    version: ${GITHUB_REF_NAME}
 ```
