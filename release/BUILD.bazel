@@ -4,7 +4,7 @@ load(":release.bzl", "multi_platform_binaries", "release")
 
 # Build a plugin for all supported platforms
 multi_platform_binaries(
-    # This name will determine what users put in their .aspect/cli/plugins.yaml:
+    # This name will determine what users put in their .aspect/cli/config.yaml:
     # - name: fix-visibility
     name = "fix-visibility",
     embed = ["//:plugin-fix-visibility_lib"],

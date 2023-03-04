@@ -9,7 +9,7 @@ First build the plugin from source:
 % bazel build ...
 ```
 
-Note that the `.aspect/cli/plugins.yaml` file has a reference to the path under `bazel-bin` where the plugin binary was just written.
+Note that the `.aspect/cli/config.yaml` file has a reference to the path under `bazel-bin` where the plugin binary was just written.
 On the first build, you'll see a warning printed that the plugin doesn't exist at this path.
 This is just the development flow for working on plugins; users will reference the plugin's releases which are downloaded for them automatically.
 
