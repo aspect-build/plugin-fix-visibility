@@ -18,9 +18,12 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"log"
 	"os"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/aspect-build/aspect-cli/bazel/buildeventstream"
 	"github.com/aspect-build/aspect-cli/pkg/ioutils"
@@ -37,6 +40,7 @@ func main() {
 	goplugin.Serve(config.NewConfigFor(&FixVisibilityPlugin{
 		buildozer:    &buildozer{},
 		targetsToFix: &fixOrderedSet{nodes: make(map[fixNode]struct{})},
+		besChan:      make(chan orderedBuildEvent, 100),
 	}))
 }
 
@@ -46,6 +50,15 @@ type FixVisibilityPlugin struct {
 
 	buildozer    runner
 	targetsToFix *fixOrderedSet
+
+	besOnce             sync.Once
+	besChan             chan orderedBuildEvent
+	besHandlerWaitGroup sync.WaitGroup
+}
+
+type orderedBuildEvent struct {
+	event          *buildeventstream.BuildEvent
+	sequenceNumber int64
 }
 
 const visibilityIssueSubstring = "is not visible from target"
@@ -53,10 +66,55 @@ const removePrivateVisibilityBuildozerCommand = "remove visibility //visibility:
 
 var visibilityIssueRegex = regexp.MustCompile(fmt.Sprintf(`.*target '(.*)' %s '(.*)'.*`, visibilityIssueSubstring))
 
-// BEPEventCallback satisfies the Plugin interface. It processes all the analysis
-// failures that represent a visibility issue, collecting them for later
-// processing in the post-build hook execution.
 func (plugin *FixVisibilityPlugin) BEPEventCallback(event *buildeventstream.BuildEvent, sequenceNumber int64) error {
+	plugin.besChan <- orderedBuildEvent{event: event, sequenceNumber: sequenceNumber}
+
+	plugin.besOnce.Do(func() {
+		plugin.besHandlerWaitGroup.Add(1)
+		go func() {
+			defer plugin.besHandlerWaitGroup.Done()
+			var nextSn int64 = 1
+			eventBuf := make(map[int64]*buildeventstream.BuildEvent)
+			for o := range plugin.besChan {
+				if o.sequenceNumber == 0 {
+					// Zero is an invalid squence number. Process the event since we can't order it.
+					if err := plugin.BEPEventHandler(o.event); err != nil {
+						log.Printf("error handling build event: %v\n", err)
+					}
+					continue
+				}
+
+				// Check for duplicate sequence numbers
+				if _, exists := eventBuf[o.sequenceNumber]; exists {
+					log.Printf("duplicate sequence number %v\n", o.sequenceNumber)
+					continue
+				}
+
+				// Add the event to the buffer
+				eventBuf[o.sequenceNumber] = o.event
+
+				// Process events in order
+				for {
+					if orderedEvent, exists := eventBuf[nextSn]; exists {
+						if err := plugin.BEPEventHandler(orderedEvent); err != nil {
+							log.Printf("error handling build event: %v\n", err)
+						}
+						delete(eventBuf, nextSn) // Remove processed event
+						nextSn++                 // Move to the next expected sequence
+					} else {
+						break
+					}
+				}
+			}
+		}()
+	})
+
+	return nil
+}
+
+// BEPEventHandler processes all the analysis failures that represent a visibility issue,
+// collecting them for later processing in the post-build hook execution.
+func (plugin *FixVisibilityPlugin) BEPEventHandler(event *buildeventstream.BuildEvent) error {
 	// First, verify if the received event is of the type Aborted. The visibility
 	// issue events are emitted as ANALYSIS_FAILUE, so if there's an analysis
 	// failure and the description of the event contains the known-issue string,
@@ -85,6 +143,14 @@ func (plugin *FixVisibilityPlugin) PostBuildHook(
 	isInteractiveMode bool,
 	promptRunner ioutils.PromptRunner,
 ) error {
+	// Close the build events channel
+	close(plugin.besChan)
+
+	// Wait for all build events to come in
+	if !waitGroupWithTimeout(&plugin.besHandlerWaitGroup, 60*time.Second) {
+		log.Printf("timed out waiting for BES events\n")
+	}
+
 	if plugin.targetsToFix.size == 0 {
 		return nil
 	}
@@ -161,6 +227,26 @@ func (plugin *FixVisibilityPlugin) PostRunHook(
 	promptRunner ioutils.PromptRunner,
 ) error {
 	return plugin.PostBuildHook(isInteractiveMode, promptRunner)
+}
+
+// waitGroupWithTimeout waits for a WaitGroup with a specified timeout.
+func waitGroupWithTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
+	done := make(chan struct{})
+
+	// Run a goroutine to close the channel when WaitGroup is done
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// WaitGroup finished within timeout
+		return true
+	case <-time.After(timeout):
+		// Timeout occurred
+		return false
+	}
 }
 
 func (plugin *FixVisibilityPlugin) hasPrivateVisibility(toFix string) (bool, error) {
