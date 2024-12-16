@@ -1,5 +1,5 @@
-load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_library")
 load("@bazel_gazelle//:def.bzl", "gazelle")
+load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_library")
 load("//release:release.bzl", "local_plugin")
 
 # Run this target to update the go_* rules in this file
@@ -12,6 +12,7 @@ gazelle(name = "gazelle")
 gazelle(
     name = "update_go_deps",
     args = [
+        "-build_file_proto_mode=disable_global",
         "-from_file=go.mod",
         "-to_macro=go.bzl%deps",
         "-prune",
@@ -27,10 +28,10 @@ go_library(
     visibility = ["//:__subpackages__"],
     deps = [
         "@bazel_gazelle//label:go_default_library",
-        "@build_aspect_cli//bazel/buildeventstream",
-        "@build_aspect_cli//pkg/ioutils",
-        "@build_aspect_cli//pkg/plugin/sdk/v1alpha3/config",
-        "@build_aspect_cli//pkg/plugin/sdk/v1alpha3/plugin",
+        "@com_github_aspect_build_aspect_cli//bazel/buildeventstream",
+        "@com_github_aspect_build_aspect_cli//pkg/ioutils",
+        "@com_github_aspect_build_aspect_cli//pkg/plugin/sdk/v1alpha4/config",
+        "@com_github_aspect_build_aspect_cli//pkg/plugin/sdk/v1alpha4/plugin",
         "@com_github_bazelbuild_buildtools//edit:go_default_library",
         "@com_github_hashicorp_go_plugin//:go-plugin",
         "@com_github_manifoldco_promptui//:promptui",
