@@ -22,14 +22,14 @@ import (
 	"regexp"
 	"strings"
 
-	"aspect.build/cli/bazel/buildeventstream"
-	"aspect.build/cli/pkg/ioutils"
-	"aspect.build/cli/pkg/plugin/sdk/v1alpha3/config"
-	aspectplugin "aspect.build/cli/pkg/plugin/sdk/v1alpha3/plugin"
-	goplugin "github.com/hashicorp/go-plugin"
-	"github.com/manifoldco/promptui"
+	"github.com/aspect-build/aspect-cli/bazel/buildeventstream"
+	"github.com/aspect-build/aspect-cli/pkg/ioutils"
+	"github.com/aspect-build/aspect-cli/pkg/plugin/sdk/v1alpha4/config"
+	aspectplugin "github.com/aspect-build/aspect-cli/pkg/plugin/sdk/v1alpha4/plugin"
 	"github.com/bazelbuild/bazel-gazelle/label"
 	"github.com/bazelbuild/buildtools/edit"
+	goplugin "github.com/hashicorp/go-plugin"
+	"github.com/manifoldco/promptui"
 )
 
 // main starts up the plugin as a child process of the CLI and connects the gRPC communication.
@@ -50,12 +50,13 @@ type FixVisibilityPlugin struct {
 
 const visibilityIssueSubstring = "is not visible from target"
 const removePrivateVisibilityBuildozerCommand = "remove visibility //visibility:private"
+
 var visibilityIssueRegex = regexp.MustCompile(fmt.Sprintf(`.*target '(.*)' %s '(.*)'.*`, visibilityIssueSubstring))
 
 // BEPEventCallback satisfies the Plugin interface. It processes all the analysis
 // failures that represent a visibility issue, collecting them for later
 // processing in the post-build hook execution.
-func (plugin *FixVisibilityPlugin) BEPEventCallback(event *buildeventstream.BuildEvent) error {
+func (plugin *FixVisibilityPlugin) BEPEventCallback(event *buildeventstream.BuildEvent, sequenceNumber int64) error {
 	// First, verify if the received event is of the type Aborted. The visibility
 	// issue events are emitted as ANALYSIS_FAILUE, so if there's an analysis
 	// failure and the description of the event contains the known-issue string,
